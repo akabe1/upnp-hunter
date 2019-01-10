@@ -90,12 +90,13 @@ class UPnPHunter():
 
 
 
+	
     def sendMsearch(self, ssdp_req):
-        # Send the ssdp request
+        # Send the ssdp request and retrieve response
+        buf_resp = set()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setblocking(0)
-        buf_resp = []
-        resp = ""
+        # Sending ssdp requests
         while len(ssdp_req):
             # Blocking socket client until the request is completely sent
             try:
@@ -109,25 +110,31 @@ class UPnPHunter():
                 print("[!] Blocking socket until ", len(ssdp_req), " is sent.")       
                 select.select([], [sock], [])
                 continue
-        # Blocking socket until there are ssdp responses to be read or timeout is reached
-        readable, __, __ = select.select([sock], [], [], SSDP_TIMEOUT)
-        if not readable:
-            # Timeout reached without receiving any ssdp response
-            print("[!] Got timeout without receiving any ssdp response.")
-        else:
-            # Almost an ssdp response was received
-            if readable[0]:
-                try:
-                    data = sock.recv(1024)
-                    if data:
-                        buf_resp.append(data.decode("ASCII"))
-                except socket.error, exc:
-                    print("[E] Got error %s with socket when receiving") % exc
-                    sock.close()
-                    raise exc
-        # Assemblage of the ssdp response from received data chunks 
-        resp = "".join(buf_resp)
+        # Retrieving ssdp responses
+        num_resp = 0
+        while sock:
+            # Blocking socket until there are ssdp responses to be read or timeout is reached
+            readable, __, __ = select.select([sock], [], [], SSDP_TIMEOUT)
+            if not readable:
+                # Timeout reached without receiving any ssdp response
+                if num_resp == 0:
+                	print("[!] Got timeout without receiving any ssdp response.")
+                break
+            else:
+            	num_resp = num_resp + 1
+                # Almost an ssdp response was received
+                if readable[0]:
+                    try:
+                   		data = sock.recv(1024)
+                   		if data:
+                 			buf_resp.add(data.decode('ASCII'))
+                    except socket.error, exc:
+                        print("[E] Got error %s with socket when receiving") % exc
+                        sock.close()
+                        raise exc
         sock.close()
+        # Assemblage of the ssdp response from received data chunks
+        resp = list(buf_resp)
         return resp
 
 
@@ -140,16 +147,17 @@ class UPnPHunter():
         ssdp_requests = [self.ssdpReqBuilder(SSDP_TIMEOUT, ST_ALL), self.ssdpReqBuilder(SSDP_TIMEOUT, ST_ROOTDEV)]
         # First try with "Ssdp:All" request type
         print("[+] Start hunting with \"Ssdp:All\" ssdp request type")
-        ssdp_response = self.sendMsearch(ssdp_requests[0])
+        ssdp_responses = self.sendMsearch(ssdp_requests[0])
         # Then try with the alternative "Root:Device" request type
-        if not ssdp_response:
+        if not ssdp_responses:
             print("[+] Retrying with \"Root:Device\" ssdp request type")
-            ssdp_response = self.sendMsearch(ssdp_requests[1])
+            ssdp_responses = self.sendMsearch(ssdp_requests[1])
         # Extract location heaader information from ssdp response
-        if ssdp_response:
-            location_result = location_regex.search(ssdp_response.decode("ASCII"))
-            if location_result and (location_result.group(1) in locations) == False:
-                locations.add(location_result.group(1))
+        if ssdp_responses:
+            for ssdp_resp in ssdp_responses:
+                location_result = location_regex.search(ssdp_resp.decode("ASCII"))
+                if location_result and (location_result.group(1) in locations) == False:
+                    locations.add(location_result.group(1))
         else:
             print("[!] Unsucessfull hunt, none active UPnP service was found. Try with other target IPs")
             sys.exit(0)
@@ -373,12 +381,12 @@ class UPnPHunter():
         n_key = 0
         for key,values in input_dict.iteritems():
             n_key = n_key + 1
-            print("[+] UPnP location URL [%s]:\n%s") % (n_key, key)
-            print("#------------------------------#")
+            print("[+] UPnP location URL [%s]:\n%s\n") % (n_key, key)
             n_value = 0
             for v in values:
                 n_value = n_value+1
                 print("[+] Soap request [%s]: \n%s\n") % (str(n_value), v)
+            print("[------------- End UPnP SOAP requests for location URL [%s] ---------------]\n\n") % n_key
 
 
 
@@ -389,13 +397,13 @@ class UPnPHunter():
             n_url = 0
             for url,requests in input_dict.iteritems():
                 n_url = n_url + 1
-                fd.write("UPnP location URL ["+str(n_url)+"]:\n\""+url+"\"")
-                fd.write("\n#------------------------------------------------#")
+                fd.write("UPnP location URL ["+str(n_url)+"]:\n\""+url+"\"\n")
+                fd.write("\n")
                 n_req = 0
                 for req in requests:
                     n_req = n_req + 1
                     fd.write("\nSOAP request ["+str(n_req)+"]:\n")
-                    fd.write(req+"\n")
+                fd.write("[------------- End UPnP SOAP requests for location URL ["+str(n_url)+"] ---------------]\n\n")
 
 
 
@@ -478,21 +486,24 @@ def main():
         else:
             # Some dangerous LAN SOAP request were found
             if lan_soaps:
-                print("[+] Some dangerous LANHostConfigManagement SOAP requests was found")
+                print("[+] Some dangerous LANHostConfigManagement SOAP request was found")
                 if out_filename:
                     UH.saveFile("lan_"+out_filename, lan_soaps)
                 else:
                     print("[+] Printing the LAN UPnP SOAP requests for each in scope location URLs:")
                     UH.printResults(lan_soaps)
+                    print("[------------- End LAN UPnP SOAP requests -------------------]")
  
             if wan_soaps:
                 # Some dangerous WAN SOAP request were found
-                print("[+] Some dangerous WANIP/PPPConnection SOAP requests was found")
+                print("[+] Some dangerous WANIP/PPPConnection SOAP request was found")
                 if out_filename:
                     UH.saveFile("wan_"+out_filename, wan_soaps)
                 else:
                     print("[+] Printing the WAN UPnP SOAP requests for each in scope location URLs:")                
                     UH.printResults(wan_soaps)
+                    print("[------------- End WAN UPnP SOAP requests -------------------]")
+
 
 
 
