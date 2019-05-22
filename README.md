@@ -10,10 +10,11 @@ UPnP Hunter
 ```
 
 # Description
-UPnP Hunter is a simple Python script which could be useful to find active UPnP 
-services/devices running on the specified target IP and extract the related SOAP 
-requests. Then is possible use them to interact with the UPnP services via the 
-preferred tools (i.e. an HTTP fuzzer).
+UPnP Hunter is a simple Python script which could be useful as penetration testing tool 
+to find active UPnP services/devices running on the specified target IP and extract the 
+related SOAP requests/methods. 
+The results of this UPnP scan could then be used to to deepen the analysis and directly 
+interact with the UPnP services via the preferred tools (i.e. an HTTP fuzzer).
 
 # Install
 Just clone or download this repository.
