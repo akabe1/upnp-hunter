@@ -181,7 +181,7 @@ class UPnPHunter():
         if len(found_locations) > 0:
             for fl_url in found_locations:
                 fl_ip =  urlparse(fl_url).netloc
-                if fl_ip.split(":")[0] in str(whitelist_ip):
+                if fl_ip.split(":")[0] in whitelist_ip:
                     scope_urls.append(fl_url)
                     print("[+] Found valid location URL \"%s\"") % fl_url
                 else:
@@ -200,7 +200,11 @@ class UPnPHunter():
                     # Get the xml files
                     download_req = urllib2.Request(d_url, None)
                     download_resp = urllib2.urlopen(download_req)
-                    xml_files_dict[d_url] = download_resp
+                    # Extract the response body
+                    if download_resp and download_resp.code == 200 and download_resp.msg:
+                        print("[+] Successfully downloaded xml file \"%s\" ") % d_url
+                        read_resp = download_resp.read()
+                        xml_files_dict[d_url] = read_resp
                 except:
                     print("[!] Skipping, failed to retrieve the XML file: %s .") % d_url
                     continue
@@ -212,16 +216,15 @@ class UPnPHunter():
         # Extract the juicy info from UPnP Description and SCDP xml files
         output_dict = {}
         arg_list = []
-        # Parse the xml file
-        tree = ET.parse(file_content)
-        root_XML = tree.getroot()
+        # Parse the xml file content
+        root_XML = ET.fromstring(file_content)
         # Use the xml namespace 'xmlns="urn:schemas-upnp-org:device-1-0'
         ns = root_XML.tag.split('}')[0].strip('{')
         # Check if is a Description (with location_url) or SCDP file
         if location_url:
             # Parse the Description XML file to extract the info about Services
             # Build the base url element
-            base_URL_elem = root_XML.findall(".//{"+ns+"}base_URL")
+            base_URL_elem = root_XML.findall(".//{"+ns+"}URLBase")
             if base_URL_elem:
                 base_URL = base_URL_elem[0].text.rstrip('/')
             else:
@@ -350,6 +353,9 @@ class UPnPHunter():
                 print("[+] Downloading the SCDP file: \"%s\"") % services_dict[s_type][1]
                 # Extract the juicy info from SCDP files
                 scdp_dict = self.downloadXMLfiles(scdp_list)
+                if not scdp_dict:
+                    print("[!] Warning, no UPnP service retrieved for %s" % "".join(scdp_url for scdp_url in scdp_list))
+                    continue
                 for scdp_file in scdp_dict.values():
                     action_dict = self.parseXMLfile(scdp_file, None)    
                 # Build All the UPnP soap requests
