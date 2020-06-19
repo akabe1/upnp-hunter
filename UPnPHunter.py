@@ -2,9 +2,9 @@
 #
 # Simple python script which could be useful to find active UPnP 
 # services/devices in the specified target subnet and extract 
-# the related SOAP requests.
+# the related SOAP, Subscribe and Presentation requests.
 #
-# Copyright (C) 2019   Maurizio Siddu
+# Copyright (C) 2019 Maurizio Siddu
 #
 #
 # This program is free software: you can redistribute it and/or modify
@@ -19,7 +19,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
-
 
 
 import socket
@@ -39,9 +38,9 @@ LOGO = """\
  ____ _____________     __________    ___ ___               __                
 |    |   \______   \____\______   \  /   |   \ __ __  _____/  |_  ___________
 |    |   /|     ___/    \|     ___/ /    ~    \  |  \/    \   __\/ __ \_  __ \\
-|    |  / |    |  |   |  \    |     \    Y    /  |  /   |  \  | \  ___/|  | \/
+| | / | | | | \ | \ Y / | / | \ | \ ___ / | | \ /
 |______/  |____|  |___|  /____|      \___|_  /|____/|___|  /__|  \_____>__|   
-v1.0.0                 \/                  \/            \/                 
+v2.0.0                 \/                  \/            \/                 
 """
 
 # Define some global variables
@@ -58,6 +57,10 @@ class UPnPHunter():
         self.soap_reqs_dict = {}
         self.LAN_reqs_dict = {}
         self.WAN_reqs_dict = {}
+        self.Subs_reqs_dict = {}
+        self.Pres_reqs_dict = {}
+
+
 
     def getUPnPLocations(self):
         # Getter for upnp_location list
@@ -67,13 +70,21 @@ class UPnPHunter():
         # Getter for upnp_location list
         return self.soap_reqs_dict
 
-    def getLANSOAPs(self):
+    def getLANSOAPs (self):
         # Getter for upnp_location list
         return self.LAN_reqs_dict
 
     def getWANSOAPs(self):
         # Getter for upnp_location list
         return self.WAN_reqs_dict
+
+    def getSubs(self):
+        # Getter for upnp_location list
+        return self.Subs_reqs_dict
+
+    def getPres(self):
+        # Getter for upnp_location list
+        return self.Pres_reqs_dict
 
 
 
@@ -94,7 +105,7 @@ class UPnPHunter():
     def sendMsearch(self, ssdp_req):
         # Send the ssdp request and retrieve response
         buf_resp = set()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = socket.socket (socket.AF_INET, socket.SOCK_DGRAM)
         sock.setblocking(0)
         # Sending ssdp requests
         while len(ssdp_req):
@@ -180,7 +191,7 @@ class UPnPHunter():
         # Finally check if the found location IPs are in target scope
         if len(found_locations) > 0:
             for fl_url in found_locations:
-                fl_ip =  urlparse(fl_url).netloc
+                fl_ip = urlparse (fl_url) .netloc
                 if fl_ip.split(":")[0] in whitelist_ip:
                     scope_urls.append(fl_url)
                     print("[+] Found valid location URL \"%s\"") % fl_url
@@ -212,14 +223,30 @@ class UPnPHunter():
 
 
 
-    def parseXMLfile(self, file_content, location_url):
+    def buildURL(self, url, base_url):
+        if not url.startswith("http"):
+            if url.startswith("/"):
+                url = base_url + url
+            else:
+                url = base_url + "/" + url
+        return url
+
+
+
+    def parseXMLfile(self, file_content, location_url, isPresentation):
         # Extract the juicy info from UPnP Description and SCDP xml files
         output_dict = {}
         arg_list = []
+        ctrl_URL, scpd_URL, subs_URL, pres_URL = None, None, None, None
         # Parse the xml file content
+        #file_content = file_content.replace("\t", "")
+        #file_content = file_content.replace(" ", "")
         root_XML = ET.fromstring(file_content)
         # Use the xml namespace 'xmlns="urn:schemas-upnp-org:device-1-0'
         ns = root_XML.tag.split('}')[0].strip('{')
+        if ns == 'root':
+            print("[!] Error the UPnP Discovery file has not xml namespace, exiting.")
+            sys.exit(0)
         # Check if is a Description (with location_url) or SCDP file
         if location_url:
             # Parse the Description XML file to extract the info about Services
@@ -228,17 +255,32 @@ class UPnPHunter():
             if base_URL_elem:
                 base_URL = base_URL_elem[0].text.rstrip('/')
             else:
-                url = urlparse(location_url)
+                url = urlparse (location_url)
                 base_URL = '%s://%s' % (url.scheme, url.netloc)
-            # Extract service type, control url and scpd url 
-            for serv in root_XML.findall(".//{"+ns+"}service"):
-                service_type = (serv.find(".//{"+ns+"}serviceType")).text
-                ctrl_URL = base_URL+(serv.find(".//{"+ns+"}controlURL")).text
-                scpd_URL = base_URL+(serv.find(".//{"+ns+"}SCPDURL")).text
-                # Aggregate the extracted info 
-                output_dict[service_type] = [ctrl_URL, scpd_URL]
+            # Run here when searching presentation url in Description file
+            if isPresentation:
+                # Extract presentationURL
+                pres_URL_elem = (root_XML.findall(".//{"+ns+"}presentationURL"))
+                if pres_URL_elem:
+                    pres_URL = pres_URL_elem[0].text.rstrip('/')
+                    pres_URL = self.buildURL(pres_URL, base_URL)
+                # Aggregate the extracted info
+                output_dict['pres_upnphunter'] = [None, None, None, pres_URL]
+            # Run here when searching for services in Description file
+            else:
+                # Extract service type, control url, scpd url and subscribe url 
+                for serv in root_XML.findall(".//{"+ns+"}service"):
+                    service_type = (serv.find(".//{"+ns+"}serviceType")).text
+                    ctrl_URL = (serv.find(".//{"+ns+"}controlURL")).text
+                    ctrl_URL = self.buildURL(ctrl_URL, base_URL)
+                    scpd_URL = (serv.find(".//{"+ns+"}SCPDURL")).text
+                    scpd_URL = self.buildURL(scpd_URL, base_URL)
+                    subs_URL = (serv.find(".//{"+ns+"}eventSubURL")).text
+                    subs_URL = self.buildURL(subs_URL, base_URL)
+                    # Aggregate the extracted info 
+                    output_dict[service_type] = [ctrl_URL, scpd_URL, subs_URL, None]
+        # Run here when parsing SCDP files                    
         else:
-            # Parse the SCDP xml file to extract the info about Actions
             # Extract action info
             for act in root_XML.findall(".//{"+ns+"}action"):
                 arg_name = []
@@ -343,13 +385,15 @@ class UPnPHunter():
         scope_locations = self.checkIPScope(self.upnp_locations, target_ip)
         discovery_files_dict = self.downloadXMLfiles(scope_locations)
         for loc_url, loc_file in discovery_files_dict.iteritems():
-            services_dict = self.parseXMLfile(loc_file, loc_url)
+            services_dict = self.parseXMLfile(loc_file, loc_url, False)
             all_soap_reqs, LAN_soap_reqs, WAN_soap_reqs = [], [], []
             skip_LAN = True
             skip_WAN = True
             for s_type in services_dict:
+                # Build the soap requests
                 scdp_list = []
-                scdp_list.append(services_dict[s_type][1])
+                if s_type != 'pres_upnphunter':
+                    scdp_list.append(services_dict[s_type][1])
                 print("[+] Downloading the SCDP file: \"%s\"") % services_dict[s_type][1]
                 # Extract the juicy info from SCDP files
                 scdp_dict = self.downloadXMLfiles(scdp_list)
@@ -357,7 +401,7 @@ class UPnPHunter():
                     print("[!] Warning, no UPnP service retrieved for %s" % "".join(scdp_url for scdp_url in scdp_list))
                     continue
                 for scdp_file in scdp_dict.values():
-                    action_dict = self.parseXMLfile(scdp_file, None)    
+                    action_dict = self.parseXMLfile(scdp_file, None, False)    
                 # Build All the UPnP soap requests
                 for ac_name in action_dict:
                     all_soap_reqs.append(self.soapReqBuilder(s_type, services_dict[s_type][0], ac_name, action_dict[ac_name]))    
@@ -377,9 +421,98 @@ class UPnPHunter():
                 self.LAN_reqs_dict[loc_url] = LAN_soap_reqs
             if not skip_WAN:
                 #  Only WAN soap requests
-                self.WAN_reqs_dict[loc_url] = WAN_soap_reqs
+                self.WAN_reqs_dict [loc_url] = WAN_soap_reqs
             # All soap requests
             self.soap_reqs_dict[loc_url] = all_soap_reqs
+
+
+
+
+
+    def subscribeReqBuilder(self, subs_URL):
+        # Build the subscribe requests for testing purposes
+        target_url = urlparse(subs_URL)
+        subscribe_ip_port = target_url.netloc
+        subscribe_path = target_url.path
+        # Callback IP and port must be manually specified on burp repeater
+        callback_ip_port = "http://"+"YOUR_LISTENING_IP:YOUR_LISTENING_PORT"
+        # Final assemblage of the subscribe request
+        subscribe_req = "SUBSCRIBE {0} HTTP/1.1\r\n" \
+        "Host: {1}\r\n" \
+        "User-Agent: unix/5.1 UPnP/1.1 BHunter/2.0\r\n" \
+        "Callback: <{2}>\r\n" \
+        "NT: upnp:event\r\n" \
+        "Timeout: Second-300\r\n" \
+        "\r\n" \
+        .format(subscribe_path, subscribe_ip_port, callback_ip_port)
+        '''
+        EXAMPLE OF BUILT SUBSCRIBE REQUEST:
+        -----------------------------------
+        SUBSCRIBE /upnp/event/WiFiSetup1 HTTP/1.1
+        HOST: 192.168.1.1:49155
+        USER-AGENT:  unix/5.1 UPnP/1.1 BHunter/2.0
+        CALLBACK: <http://192.168.1.42:4444>
+        NT: upnp:event
+        TIMEOUT: Second-300
+        '''        
+        return subscribe_req
+
+
+
+
+    def buildSubscribes(self, target_ip):
+        subs_req_dict = {}
+        scope_locations = self.checkIPScope(self.upnp_locations, target_ip)
+        discovery_files_dict = self.downloadXMLfiles(scope_locations)
+        for loc_url, loc_file in discovery_files_dict.iteritems():
+            services_dict = self.parseXMLfile(loc_file, loc_url, False)
+            subs_reqs = []
+            for s_type in services_dict:
+                # Build All the UPnP subscribe requests
+                if s_type != 'pres_upnphunter':
+                    if services_dict[s_type][2]:
+                        subs_reqs.append(self.subscribeReqBuilder(services_dict[s_type][2]))
+            if subs_reqs:
+                self.Subs_reqs_dict[loc_url] = subs_reqs
+
+
+
+    def presentationReqBuilder(self, pres_URL):
+        # Build the presentation requests for testing purposes
+        target_url = urlparse(pres_URL)
+        presentation_ip_port = target_url.netloc
+        presentation_path = target_url.path
+        if not presentation_path:
+            presentation_path = "/"
+        # Final assemblage of the subscribe request
+        presentation_req = "GET {0} HTTP/1.1\r\n" \
+        "Host: {1}\r\n" \
+        "User-Agent: unix/5.1 UPnP/1.1 BHunter/2.0\r\n" \
+        "\r\n" \
+        .format(presentation_path, presentation_ip_port)
+        '''
+        EXAMPLE OF BUILT PRESENTATION REQUEST:
+        -----------------------------------
+        GET /pres_page.html HTTP/1.1
+        HOST: 192.168.1.1:49155
+        USER-AGENT:  unix/5.1 UPnP/1.1 BHunter/2.0
+        '''        
+        return presentation_req
+
+
+
+    def buildPresentations(self, target_ip):
+        pres_req_dict = {}
+        scope_locations = self.checkIPScope(self.upnp_locations, target_ip)
+        discovery_files_dict = self.downloadXMLfiles(scope_locations)
+        for loc_url, loc_file in discovery_files_dict.iteritems():
+            services_dict = self.parseXMLfile(loc_file, loc_url, True)
+            pres_reqs = []
+            # Build the UPnP presentation request
+            if services_dict["pres_upnphunter"] and services_dict["pres_upnphunter"][3]:
+                pres_reqs.append(self.presentationReqBuilder(services_dict["pres_upnphunter"][3]))
+            if pres_reqs:
+                self.Pres_reqs_dict[loc_url] = pres_reqs
 
 
 
@@ -387,12 +520,12 @@ class UPnPHunter():
         n_key = 0
         for key,values in input_dict.iteritems():
             n_key = n_key + 1
-            print("[+] UPnP location URL [%s]:\n%s\n") % (n_key, key)
+            print("[+] UPnP location URL [%s]: %s\n") % (n_key, key)
             n_value = 0
             for v in values:
                 n_value = n_value+1
-                print("[+] Soap request [%s]: \n%s\n") % (str(n_value), v)
-            print("[------------- End UPnP SOAP requests for location URL [%s] ---------------]\n\n") % n_key
+                print("[+] UPnP request [%s]: \n%s\n") % (str(n_value), v)
+            print("[------------ End UPnP requests for location URL [%s] [%s] -----------]\n") % (n_key, key)
 
 
 
@@ -408,8 +541,8 @@ class UPnPHunter():
                 n_req = 0
                 for req in requests:
                     n_req = n_req + 1
-                    fd.write("\nSOAP request ["+str(n_req)+"]:\n")
-                fd.write("[------------- End UPnP SOAP requests for location URL ["+str(n_url)+"] ---------------]\n\n")
+                    fd.write("\nUPnP request ["+str(n_req)+"]:\n")
+                fd.write("[------------- End UPnP requests for location URL ["+str(n_url)+"] ---------------]\n\n")
 
 
 
@@ -418,7 +551,9 @@ def main():
     input_parser = argparse.ArgumentParser(description="Find UPnP services and build their SOAP requests")
     input_parser.add_argument("target_ip", type=str, help="Specify the target IP or subnet in CIDR notation (only IPv4 supported)")
     input_parser.add_argument("--all", "-a", action="store_true", help="Get all UPnP SOAP requests")
-    input_parser.add_argument("--dangerous", "-d", action="store_true", help="Get only the dangerous UPnP SOAP requests (LANHostConfigManagement and WANIP/PPPConnection methods)")
+    input_parser.add_argument("--igd", "-i", action="store_true", help="Get only the IGD SOAP requests (LANHostConfigManagement and WANIP/PPPConnection methods)")
+    input_parser.add_argument("--subs", "-s", action="store_true", help="Get all UPnP SUbscribe requests")
+    input_parser.add_argument("--pres", "-p", action="store_true", help="Get all UPnP Presentation requests")
     input_parser.add_argument("--output_file", "-o", type=str , help="Specify the file where to save the results")
     args = input_parser.parse_args()
 
@@ -433,11 +568,11 @@ def main():
             sys.exit(-1)
 
     # Check if the various result type options are correct
-    if (not args.all and not args.dangerous):
-        print("[!] You don't have specified any UPnP request type, default is \"ALL\"")
+    if (not args.all and not args.igd and not args.subs and not args.pres):
+        print("[!] You don't have specified any UPnP request type, default is \"ALL Soaps\"")
         args.all=True
 
-    if (args.all and args.dangerous):
+    if (args.all and args.igd and args.subs and args.pres):
         print("[E] You must select only one type of UPnP request to build")
         input_parser.print_help()
         exit(-1)
@@ -467,6 +602,8 @@ def main():
 
     # Build the UPnP SOAP requests from discovered listening services/devices
     UH.buildSOAPs(args.target_ip)
+    UH.buildSubscribes(args.target_ip)
+    UH.buildPresentations(args.target_ip)
     # Get all the SOAP requests
     if args.all:
         all_soaps = UH.getAllSOAPs()
@@ -481,34 +618,61 @@ def main():
                 print("[+] Printing all the UPnP SOAP requests for each in scope location URLs:")
                 UH.printResults(all_soaps)
 
-    # Get only the dangerous SOAP requests
-    elif args.dangerous:
+    # Get only the IGD SOAP requests
+    elif args.igd:
         lan_soaps = UH.getLANSOAPs()
         wan_soaps = UH.getWANSOAPs()
-        # First check if any UPnP dangerous Soap request was built
+        # First check if any UPnP IGD Soap request was built
         if not lan_soaps and not wan_soaps:
-            # None dangerous soap request was found
-            print("[+] Done, some UPnP service was found but none UPnP dangerous LAN and WAN methods were exposed")
+            # None igd soap request was found
+            print("[+] Done, some UPnP service was found but none UPnP IGD methods were exposed")
         else:
-            # Some dangerous LAN SOAP request were found
+            # Check if some IGD LAN SOAP request were found
             if lan_soaps:
-                print("[+] Some dangerous LANHostConfigManagement SOAP request was found")
+                print("[+] Some IGD LANHostConfigManagement SOAP request was found")
                 if out_filename:
                     UH.saveFile("lan_"+out_filename, lan_soaps)
                 else:
                     print("[+] Printing the LAN UPnP SOAP requests for each in scope location URLs:")
                     UH.printResults(lan_soaps)
                     print("[------------- End LAN UPnP SOAP requests -------------------]")
- 
+            # Check if some IGD WAN SOAP request were found
             if wan_soaps:
-                # Some dangerous WAN SOAP request were found
-                print("[+] Some dangerous WANIP/PPPConnection SOAP request was found")
+                print("[+] Some IGD WANIP/PPPConnection SOAP request was found")
                 if out_filename:
                     UH.saveFile("wan_"+out_filename, wan_soaps)
                 else:
                     print("[+] Printing the WAN UPnP SOAP requests for each in scope location URLs:")                
                     UH.printResults(wan_soaps)
                     print("[------------- End WAN UPnP SOAP requests -------------------]")
+
+    # Get only the Subscribe requests                    
+    elif args.subs:
+        all_subs = UH.getSubs()
+        # Check the created UPnP Subscribe requests
+        if not all_subs:
+            # Something goes wrong, failed to build any subscribe request
+            print("[E] Something goes wrong, some UPnP service was found but none UPnP Subscribe request was created.")
+        else:
+            if out_filename:
+                UH.saveFile(out_filename, all_subs)
+            else:
+                print("[+] Printing all the UPnP Subscribe requests for each in scope location URLs:")
+                UH.printResults(all_subs)
+
+    # Get only the Presentation requests   
+    elif args.pres:
+        all_pres = UH.getPres()
+        # Check the created UPnP Presentation requests
+        if not all_pres:
+            # Something goes wrong, failed to build any presentation request
+            print("[E] Something goes wrong, some UPnP service was found but none UPnP Presentation request was created.")
+        else:
+            if out_filename:
+                UH.saveFile(out_filename, all_pres)
+            else:
+                print("[+] Printing all the UPnP Presentation requests for each in scope location URLs:")
+                UH.printResults(all_pres)
 
 
 
